@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+eca/__init__.py
+eca/__main__.py
+eca/core.py
+eca/evolution.py
+eca.egg-info/PKG-INFO
+eca.egg-info/SOURCES.txt
+eca.egg-info/dependency_links.txt
+eca.egg-info/entry_points.txt
+eca.egg-info/top_level.txt
+tests/test_example.py

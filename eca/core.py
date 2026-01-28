@@ -87,8 +87,25 @@ def add_decorator_to_function(source: str, fn_name: str, decorator_src: str):
 
     # insert import nodes at top if not already present (naive: always insert)
     if import_nodes:
-        # Prepend imports so they are available
-        tree.body = import_nodes + tree.body
+        # Avoid inserting duplicate imports: collect existing top-level import dumps
+        existing_import_dumps = set()
+        for n in tree.body:
+            if isinstance(n, (ast.Import, ast.ImportFrom)):
+                try:
+                    existing_import_dumps.add(ast.dump(n))
+                except Exception:
+                    pass
+        to_insert = []
+        for n in import_nodes:
+            try:
+                d = ast.dump(n)
+            except Exception:
+                d = None
+            if d and d in existing_import_dumps:
+                continue
+            to_insert.append(n)
+        if to_insert:
+            tree.body = to_insert + tree.body
 
     if decorator_expr is None:
         return None
@@ -101,13 +118,75 @@ def add_decorator_to_function(source: str, fn_name: str, decorator_src: str):
 
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == fn_name:
-            node.decorator_list.insert(0, dec_node)
-            modified = True
+            # avoid duplicate decorators: compare dumps of existing decorators
+            existing_decs = set()
+            for d in node.decorator_list:
+                try:
+                    existing_decs.add(ast.dump(d))
+                except Exception:
+                    pass
+            try:
+                dec_dump = ast.dump(dec_node)
+            except Exception:
+                dec_dump = None
+            if dec_dump and dec_dump in existing_decs:
+                # already present, skip
+                modified = True
+            else:
+                node.decorator_list.insert(0, dec_node)
+                modified = True
 
     if not modified:
         return None
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)
+
+
+def dedupe_source(source: str) -> str:
+    """Remove duplicate top-level imports and duplicate decorators on functions."""
+    try:
+        tree = ast.parse(source)
+    except Exception:
+        return source
+
+    seen_imports = set()
+    new_body = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            try:
+                d = ast.dump(node)
+            except Exception:
+                d = None
+            if d and d in seen_imports:
+                continue
+            if d:
+                seen_imports.add(d)
+            new_body.append(node)
+        elif isinstance(node, ast.FunctionDef):
+            # dedupe decorators
+            seen_decs = set()
+            new_decs = []
+            for dec in node.decorator_list:
+                try:
+                    dd = ast.dump(dec)
+                except Exception:
+                    dd = None
+                if dd and dd in seen_decs:
+                    continue
+                if dd:
+                    seen_decs.add(dd)
+                new_decs.append(dec)
+            node.decorator_list = new_decs
+            new_body.append(node)
+        else:
+            new_body.append(node)
+
+    tree.body = new_body
+    ast.fix_missing_locations(tree)
+    try:
+        return ast.unparse(tree)
+    except Exception:
+        return source
 
 
 class OptimizeRunner:

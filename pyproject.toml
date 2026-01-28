@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eca"
+version = "0.1.0"
+description = "EvoCode Accelerator (minimal prototype)"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [ { name = "ECA" } ]
+
+[project.scripts]
+eca = "eca.__main__:main"

@@ -1,0 +1,2 @@
+[console_scripts]
+eca = eca.__main__:main
