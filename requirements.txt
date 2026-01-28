@@ -1,0 +1,5 @@
+# Minimal prototype: optional extras
+# If you want numba support, uncomment below
+# numba
+# For evolutionary search using DEAP:
+deap
