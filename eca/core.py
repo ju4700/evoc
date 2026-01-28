@@ -67,11 +67,43 @@ def try_apply_transform(source: str):
 def add_decorator_to_function(source: str, fn_name: str, decorator_src: str):
     tree = ast.parse(source)
     modified = False
+
+    # Support decorator_src that may include import lines and a decorator line starting with '@'
+    lines = [l.strip() for l in decorator_src.splitlines() if l.strip()]
+    import_nodes = []
+    decorator_expr = None
+    for ln in lines:
+        if ln.startswith('@'):
+            decorator_expr = ln.lstrip('@')
+        elif ln.startswith('from ') or ln.startswith('import '):
+            try:
+                n = ast.parse(ln).body[0]
+                import_nodes.append(n)
+            except Exception:
+                pass
+        else:
+            # if user provided bare expression like "lru_cache(maxsize=None)"
+            decorator_expr = ln
+
+    # insert import nodes at top if not already present (naive: always insert)
+    if import_nodes:
+        # Prepend imports so they are available
+        tree.body = import_nodes + tree.body
+
+    if decorator_expr is None:
+        return None
+
+    try:
+        # parse decorator expression as an expression
+        dec_node = ast.parse(decorator_expr, mode='eval').body
+    except Exception:
+        return None
+
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == fn_name:
-            dec = ast.parse(decorator_src).body[0].value
-            node.decorator_list.insert(0, dec)
+            node.decorator_list.insert(0, dec_node)
             modified = True
+
     if not modified:
         return None
     ast.fix_missing_locations(tree)
