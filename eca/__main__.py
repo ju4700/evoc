@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--mode", choices=['greedy','ea'], default='greedy', help="Optimization mode: 'greedy' simple transforms, 'ea' use evolutionary search")
     parser.add_argument("--inplace", action='store_true', default=True, help="Apply best variant directly into the target file with typewriter animation")
     parser.add_argument("--delay", type=float, default=0.002, help="Delay per character for typewriter animation (seconds)")
+    parser.add_argument("--detect-hotspots", action='store_true', help="Run profiler to detect hotspots and focus evolution on them")
     args = parser.parse_args()
 
     if args.mode == 'greedy':
@@ -76,7 +77,17 @@ def main():
                 print('Wrote best variant to', out_path)
     else:
         src = open(args.file, 'r', encoding='utf8').read()
-        evo = EvolutionaryOptimizer(original_source=src, fn_name=args.fn, arg=args.arg, time_budget=args.time)
+        hotspots = None
+        if args.detect_hotspots:
+            try:
+                from .profiler import detect_hotspot_functions
+                stats = detect_hotspot_functions(args.file, args.fn, args.arg, runs=2, top_n=3)
+                hotspots = [name for name, _ in stats]
+                print('Detected hotspots:', hotspots)
+            except Exception as e:
+                print('Hotspot detection failed:', e)
+                hotspots = None
+        evo = EvolutionaryOptimizer(original_source=src, fn_name=args.fn, arg=args.arg, time_budget=args.time, hotspots=hotspots)
         best_src, best_time = evo.run()
         print('EA best time=', best_time)
         if best_src:

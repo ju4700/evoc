@@ -30,7 +30,7 @@ OPS = [
 ]
 
 
-def apply_ops_to_source(src: str, fn_name: str, ops_seq: List[int]) -> Optional[str]:
+def apply_ops_to_source(src: str, fn_name: str, ops_seq: List[int], hotspots: Optional[List[str]] = None) -> Optional[str]:
     cur = src
     for op in ops_seq:
         if op < 0 or op >= len(OPS):
@@ -39,10 +39,12 @@ def apply_ops_to_source(src: str, fn_name: str, ops_seq: List[int]) -> Optional[
         if name == 'noop':
             continue
         if name == 'lru_cache':
-            dec = 'from functools import lru_cache\\n@lru_cache(maxsize=None)'
-            v = add_decorator_to_function(cur, fn_name, dec)
-            if v:
-                cur = v
+            # only apply to function if hotspots is None or fn_name is among hotspots
+            if hotspots is None or fn_name in hotspots:
+                dec = 'from functools import lru_cache\\n@lru_cache(maxsize=None)'
+                v = add_decorator_to_function(cur, fn_name, dec)
+                if v:
+                    cur = v
         elif name == 'numba_njit':
             try:
                 import numba  # type: ignore
@@ -54,9 +56,11 @@ def apply_ops_to_source(src: str, fn_name: str, ops_seq: List[int]) -> Optional[
                 # skip if numba not available
                 pass
         elif name == 'loop_to_comp':
-            v = try_apply_transform(cur)
-            if v and v != cur:
-                cur = v
+            # loop->comp transform is function-agnostic but we only accept if hotspots is None
+            if hotspots is None:
+                v = try_apply_transform(cur)
+                if v and v != cur:
+                    cur = v
     return cur
 
 
@@ -131,12 +135,13 @@ print('RESULT', res)
 
 
 class EvolutionaryOptimizer:
-    def __init__(self, original_source: str, fn_name: str, arg: str, time_budget: int = 10, test_args=None):
+    def __init__(self, original_source: str, fn_name: str, arg: str, time_budget: int = 10, test_args=None, hotspots: Optional[List[str]] = None):
         self.src = original_source
         self.fn_name = fn_name
         self.arg = arg
         self.time_budget = time_budget
         self.test_args = test_args or ['0', '1', '10']
+        self.hotspots = hotspots
         src_path = _write_temp_source(self.src)
         baseline = _run_source_and_get_outputs(src_path, self.fn_name, self.test_args)
         if baseline is None:
@@ -157,7 +162,7 @@ class EvolutionaryOptimizer:
             if time.time() - start > self.time_budget:
                 break
             ops_seq = [random.randrange(len(OPS)) for _ in range(ops_len)]
-            cand = apply_ops_to_source(self.src, self.fn_name, ops_seq)
+            cand = apply_ops_to_source(self.src, self.fn_name, ops_seq, hotspots=self.hotspots)
             if not cand:
                 continue
             if not self._passes_correctness(cand):
@@ -186,7 +191,7 @@ class EvolutionaryOptimizer:
         toolbox.register('population', tools.initRepeat, list, toolbox.individual)
 
         def eval_ind(ind):
-            cand = apply_ops_to_source(self.src, self.fn_name, list(ind))
+            cand = apply_ops_to_source(self.src, self.fn_name, list(ind), hotspots=self.hotspots)
             if not cand:
                 return (float('inf'),)
             if not self._passes_correctness(cand):
@@ -209,7 +214,7 @@ class EvolutionaryOptimizer:
             for ind, fit in zip(pop, fitnesses):
                 ind.fitness.values = fit
                 if fit[0] < best[1]:
-                    cand = apply_ops_to_source(self.src, self.fn_name, list(ind))
+                    cand = apply_ops_to_source(self.src, self.fn_name, list(ind), hotspots=self.hotspots)
                     best = (cand, fit[0])
             offspring = toolbox.select(pop, len(pop))
             offspring = list(map(toolbox.clone, offspring))
