@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional
 from textwrap import dedent
 
 
@@ -60,6 +61,120 @@ def try_apply_transform(source: str):
         new_tree = transformer.visit(tree)
         ast.fix_missing_locations(new_tree)
         return ast.unparse(new_tree)
+    except Exception:
+        return None
+
+
+def transform_accum_to_sum(source: str) -> Optional[str]:
+    """Convert simple accumulator loops to use sum(generator).
+
+    Pattern handled inside a function:
+        s = 0
+        for i in range(...):
+            s += expr
+        return s
+
+    Replaced with:
+        return sum(expr for i in range(...))
+    """
+    try:
+        tree = ast.parse(source)
+        changed = False
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                new_body = []
+                i = 0
+                while i < len(node.body):
+                    stmt = node.body[i]
+                    if (i + 2 < len(node.body)
+                            and isinstance(stmt, ast.Assign)
+                            and isinstance(stmt.targets[0], ast.Name)
+                            and isinstance(stmt.value, ast.Constant)
+                            and stmt.value.value == 0
+                            and isinstance(node.body[i+1], ast.For)
+                            and isinstance(node.body[i+2], ast.Return)):
+                        target_name = stmt.targets[0].id
+                        for_node = node.body[i+1]
+                        ret_node = node.body[i+2]
+                        # check for AugAssign in for body adding to target
+                        if (len(for_node.body) == 1 and isinstance(for_node.body[0], ast.AugAssign)
+                                and isinstance(for_node.body[0].target, ast.Name)
+                                and for_node.body[0].target.id == target_name
+                                and isinstance(for_node.body[0].op, ast.Add)):
+                            elt = for_node.body[0].value
+                            gen = ast.GeneratorExp(elt=elt, generators=[ast.comprehension(target=for_node.target, iter=for_node.iter, ifs=[], is_async=0)])
+                            new_body.append(ast.Return(value=ast.Call(func=ast.Name(id='sum', ctx=ast.Load()), args=[gen], keywords=[])))
+                            i += 3
+                            changed = True
+                            continue
+                    new_body.append(stmt)
+                    i += 1
+                node.body = new_body
+        if changed:
+            ast.fix_missing_locations(tree)
+            return ast.unparse(tree)
+        return None
+    except Exception:
+        return None
+
+
+def transform_loop_to_generator_sum(source: str) -> Optional[str]:
+    """Convert list-append-then-sum patterns to sum(generator).
+
+    Pattern:
+        out = []
+        for x in xs:
+            out.append(expr)
+        return sum(out)
+
+    Replaced with:
+        return sum(expr for x in xs)
+    """
+    try:
+        tree = ast.parse(source)
+        changed = False
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                new_body = []
+                i = 0
+                while i < len(node.body):
+                    stmt = node.body[i]
+                    if (i + 2 < len(node.body)
+                            and isinstance(stmt, ast.Assign)
+                            and isinstance(stmt.targets[0], ast.Name)
+                            and isinstance(stmt.value, ast.List)
+                            and stmt.value.elts == []
+                            and isinstance(node.body[i+1], ast.For)
+                            and isinstance(node.body[i+2], ast.Return)):
+                        target_name = stmt.targets[0].id
+                        for_node = node.body[i+1]
+                        ret_node = node.body[i+2]
+                        # check for append in for
+                        if (len(for_node.body) == 1 and isinstance(for_node.body[0], ast.Expr)
+                                and isinstance(for_node.body[0].value, ast.Call)):
+                            call = for_node.body[0].value
+                            if (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
+                                    and call.func.attr == 'append' and call.func.value.id == target_name):
+                                # check return is sum(target)
+                                if (isinstance(ret_node.value, ast.Call)
+                                        and isinstance(ret_node.value.func, ast.Name)
+                                        and ret_node.value.func.id == 'sum'
+                                        and len(ret_node.value.args) == 1
+                                        and isinstance(ret_node.value.args[0], ast.Name)
+                                        and ret_node.value.args[0].id == target_name):
+                                    elt = call.args[0]
+                                    gen = ast.GeneratorExp(elt=elt, generators=[ast.comprehension(target=for_node.target, iter=for_node.iter, ifs=[], is_async=0)])
+                                    new_body.append(ast.Return(value=ast.Call(func=ast.Name(id='sum', ctx=ast.Load()), args=[gen], keywords=[])))
+                                    i += 3
+                                    changed = True
+                                    continue
+                    new_body.append(stmt)
+                    i += 1
+                node.body = new_body
+        if changed:
+            ast.fix_missing_locations(tree)
+            return ast.unparse(tree)
+        return None
     except Exception:
         return None
 
@@ -219,6 +334,14 @@ class OptimizeRunner:
             v2 = add_decorator_to_function(src, self.fn_name, numba_src)
             if v2:
                 self.variants.append(('numba_njit', v2))
+            numba_src_fast = 'from numba import njit\n@njit(fastmath=True)'
+            v3 = add_decorator_to_function(src, self.fn_name, numba_src_fast)
+            if v3:
+                self.variants.append(('numba_njit_fastmath', v3))
+            numba_src_par = 'from numba import njit, prange\n@njit(parallel=True, fastmath=True)'
+            v4 = add_decorator_to_function(src, self.fn_name, numba_src_par)
+            if v4:
+                self.variants.append(('numba_njit_parallel', v4))
         except Exception:
             pass
 

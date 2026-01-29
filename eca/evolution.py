@@ -20,13 +20,18 @@ except Exception:
     DEAP_AVAILABLE = False
 
 from .core import try_apply_transform, add_decorator_to_function
+from .core import transform_accum_to_sum, transform_loop_to_generator_sum
 
 
 OPS = [
     'noop',
     'lru_cache',
     'numba_njit',
+    'numba_njit_fastmath',
+    'numba_njit_parallel',
     'loop_to_comp',
+    'accum_to_sum',
+    'loop_to_generator_sum',
 ]
 
 
@@ -55,12 +60,39 @@ def apply_ops_to_source(src: str, fn_name: str, ops_seq: List[int], hotspots: Op
             except Exception:
                 # skip if numba not available
                 pass
+        elif name == 'numba_njit_fastmath':
+            try:
+                import numba  # type: ignore
+                dec = 'from numba import njit\\n@njit(fastmath=True)'
+                v = add_decorator_to_function(cur, fn_name, dec)
+                if v:
+                    cur = v
+            except Exception:
+                pass
+        elif name == 'numba_njit_parallel':
+            try:
+                import numba  # type: ignore
+                dec = 'from numba import njit, prange\\n@njit(parallel=True, fastmath=True)'
+                v = add_decorator_to_function(cur, fn_name, dec)
+                if v:
+                    cur = v
+            except Exception:
+                pass
         elif name == 'loop_to_comp':
             # loop->comp transform is function-agnostic but we only accept if hotspots is None
             if hotspots is None:
                 v = try_apply_transform(cur)
                 if v and v != cur:
                     cur = v
+        elif name == 'accum_to_sum':
+            # convert accumulator loops to sum(generator)
+            v = transform_accum_to_sum(cur)
+            if v and v != cur:
+                cur = v
+        elif name == 'loop_to_generator_sum':
+            v = transform_loop_to_generator_sum(cur)
+            if v and v != cur:
+                cur = v
     return cur
 
 
